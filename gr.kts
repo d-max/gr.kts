@@ -5,39 +5,29 @@
 
 import Gr.Task.*
 import Gr.Variant.*
-import java.lang.ProcessBuilder.Redirect
-import kotlin.system.exitProcess
 import kotlinx.cli.*
 import kotlinx.coroutines.*
+import java.text.SimpleDateFormat
+import java.util.concurrent.TimeUnit
+import kotlin.random.Random
+import kotlin.system.exitProcess
+import kotlin.system.measureTimeMillis
 
 //~ script
 
 try {
-    val cli = Cli(args)
-    val counter = Counter().apply { start() }
-    createCommands(cli).forEach loop@{
-        counter.jobName = it.name
-        val success = it.run()
-        counter.next(success)
-        if (!success) return@loop
-    }
-    counter.stop()
+    Cli(args).createCommands().forEach(Command::run)
 } catch (e: Exception) {
-    println(e.message)
     exitProcess(1)
 }
 
-fun createCommands(cli: Cli) = cli.tasks.map {
-    val command = when (it) {
+fun Cli.createCommands() = tasks.map {
+    when (it) {
         CLEAN -> Gradle.clean()
-        BUILD -> Gradle.build(cli.variant)
+        BUILD -> Gradle.build(variant)
         CHECK -> Gradle.check()
         INSTALL -> Adb.install()
-        LAUNCH -> Adb.launch()
-    }
-    command.apply {
-        redirect = !cli.quite
-        name = it.name.toLowerCase()
+        RUN -> Adb.launch()
     }
 }
 
@@ -48,17 +38,12 @@ enum class Variant {
 }
 
 enum class Task {
-    CLEAN, BUILD, CHECK, INSTALL, LAUNCH
+    CLEAN, BUILD, CHECK, INSTALL, RUN
 }
 
 class Cli(args: Array<String>) {
 
     private val cli = CommandLineInterface("./gr.kts")
-
-    val quite by cli.flagArgument(
-        "-q",
-        "Silent mode"
-    )
 
     val variant by cli.flagValueArgument(
         "-v",
@@ -79,11 +64,11 @@ class Cli(args: Array<String>) {
         "Set of tasks to perform [clean|build|check|install|run]",
         mapping = {
             when (it) {
+                "run" -> RUN
                 "clean" -> CLEAN
                 "build" -> BUILD
                 "check" -> CHECK
                 "install" -> INSTALL
-                "run" -> LAUNCH
                 else -> error("Unknown tasks set. Use [clean|build|check|install|run]")
             }
         }
@@ -94,105 +79,136 @@ class Cli(args: Array<String>) {
     }
 }
 
-class Counter {
+class Reporter(job: String) {
 
-    private var job: Job? = null
+    companion object {
+        private const val FORMAT = "mm:ss"
+
+        private const val RED = "\u001B[31m"
+        private const val GREEN = "\u001B[32m"
+        private const val WHITE = "\u001B[0m"
+        private const val MOVE = "\u001B[30D"
+        private const val CLEAN = "\u001B[K"
+
+        private const val PAD = ' '
+        private const val FAIL = 'x'
+        private const val SPACE = ' '
+        private const val SUCCESS = '✓'
+        private const val INDICATOR = '•'
+
+        private const val WIDTH = 3
+        private const val PADDING = 10
+
+        private fun cleanln() {
+            print(MOVE)
+            print(CLEAN)
+        }
+
+        private fun Long.format(): String {
+            val min = TimeUnit.MILLISECONDS.toMinutes(this)
+            val sec = TimeUnit.MILLISECONDS.toSeconds(this)
+            return String.format(
+                "%02d:%02d",
+                min, sec - TimeUnit.MINUTES.toSeconds(min)
+            )
+        }
+    }
 
     private var index = 0
     private var inc = true
-    private val chars = Array<Char>(4) { ' ' }
+    private val chars = CharArray(WIDTH) { SPACE }
+    private val jobName = job.padEnd(PADDING, PAD)
 
-    var jobName: String = ""
-
-    private fun cleanln() {
-        print("\u001B[100D")
-        print("\u001B[K")
-    }
-
-    private fun generate() {
+    private fun generateBar() {
         if (inc && index == chars.size - 1) {
             inc = false
         }
         if (!inc && index == 0) {
             inc = true
         }
-        chars.set(index, ' ')
+        chars.set(index, SPACE)
         index = if (inc) index.inc() else index.dec()
-        chars.set(index, '•')
+        chars.set(index, INDICATOR)
     }
 
-    private fun print() {
-        print('[')
-        chars.forEach { print(it) }
-        print(']')
-        print(' ')
-        print(jobName)
+    private fun printResult(time: Long, success: Boolean) {
+        val result = if (success) {
+            "$GREEN$SUCCESS$WHITE"
+        } else {
+            "$RED$FAIL$WHITE"
+        }
+        val duration = time.format()
+        val string = "[ $result ]  $jobName  $duration"
+        println(string)
     }
 
-    fun start() {
-        job = GlobalScope.launch {
-            while (true) {
-                cleanln()
-                print()
-                generate()
-                delay(100)
-            }
+    fun printBar() {
+        val bar = String(chars)
+        val string = "[$bar]  $jobName  "
+        print(string)
+    }
+
+    suspend fun displayBar() {
+        while (true) {
+            cleanln()
+            printBar()
+            generateBar()
+            delay(150)
         }
     }
 
-    fun stop() {
-        job?.cancel()
+    fun displayResult(time: Long, success: Boolean) {
         cleanln()
-    }
-
-    fun next(success: Boolean) {
-        val status = if (success) "ok" else "^^"
-        cleanln()
-        print("[ $status ]")
-        print(' ')
-        print(jobName)
-        println()
+        printResult(time, success)
     }
 }
 
 class Command(
+    private val task: Task,
     private val command: String,
     private vararg val args: String
 ) {
 
-    var redirect: Boolean = true
-    var name: String = command
-
-    fun run(): Boolean {
-        Thread.sleep(3_000)
-        return false
-//    ProcessBuilder()
-//      .command(command, *args)
-//      .apply {
-//        if (redirect) redirectOutput(Redirect.INHERIT)
-//      }
-//      .start()
-//      .waitFor()
+    fun run() {
+        runBlocking {
+            val reporter = Reporter(task.name.toLowerCase())
+            val bar = launch {
+                reporter.displayBar()
+            }
+            val process = launch {
+                val begin = System.currentTimeMillis()
+                val success = Random(System.currentTimeMillis()).let {
+                    delay(1_000 * it.nextLong(10))
+                    it.nextBoolean()
+                }
+//                val success = ProcessBuilder().command(command, *args).start().waitFor() == 0
+                val time = System.currentTimeMillis() - begin
+                bar.cancelAndJoin()
+                reporter.displayResult(time, success)
+                if (!success) throw Exception()
+            }
+            process.join()
+        }
     }
 }
 
 object Adb {
 
     fun install() =
-        Command("adb", "install") // todo add apk name
+        Command(INSTALL, "adb", "install") // todo add apk name
 
     fun launch() =
-        Command("adb", "am") // tood activity name
+        Command(RUN, "adb", "am") // tood activity name
 }
 
 object Gradle {
 
     fun clean() =
-        Command("./gradlew", "clean")
+        Command(CLEAN, "./gradlew", "clean")
 
     fun check() =
-        Command("./gradlew", "ktlint", "detekt")
+        Command(CHECK, "./gradlew", "ktlint", "detekt")
 
     fun build(variant: Variant) =
-        Command("./gradlew", "assemble${variant.name.toLowerCase().capitalize()}")
+        Command(BUILD, "./gradlew", "assemble${variant.name.toLowerCase().capitalize()}")
 }
