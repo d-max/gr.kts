@@ -10,7 +10,25 @@ import kotlin.system.exitProcess
 
 //~ script
 
+try {
+  Cli(args).createCommands().forEach(Command::run)
+} catch(e: Exception) {
+  exitProcess(1)
+}
 
+fun Cli.createCommands() = tasks.map {
+  val command = when(it) {
+    CLEAN -> Gradle.clean()
+    BUILD -> Gradle.build(variant)
+    CHECK -> Gradle.check()
+    INSTALL -> Adb.install()
+    LAUNCH -> Adb.launch()
+  }
+  command.apply {
+    redirect = !quite
+    name = it.name
+  }
+}
 
 //~ classes
 
