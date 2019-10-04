@@ -65,7 +65,7 @@ class Cli(args: Array<String>) {
 
   val tasks by cli.positionalArgumentsList(
     "T...",
-    "Gradle set of tasks to perform [build, check, install]",
+    "Set of tasks to perform [clean|build|check|install|run]",
     mapping = {
       when (it) {
         "clean" -> CLEAN
@@ -73,7 +73,7 @@ class Cli(args: Array<String>) {
         "check" -> CHECK
         "install" -> INSTALL
         "run" -> LAUNCH
-        else -> error("Unknown tasks set. Use [build|check|install|run]")
+        else -> error("Unknown tasks set. Use [clean|build|check|install|run]")
       }
     }
   )
