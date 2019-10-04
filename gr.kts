@@ -2,9 +2,14 @@
 @file:MavenRepository("jitpack", "https://jitpack.io" )
 @file:DependsOn("com.github.kotlin.kotlinx~cli:kotlinx-cli-jvm:-SNAPSHOT")
 
+import Gr.Task.*
+import Gr.Variant.*
 import kotlinx.cli.*
+import java.lang.ProcessBuilder.Redirect
+import kotlin.system.exitProcess
 
 //~ script
+
 
 
 //~ classes
@@ -60,3 +65,48 @@ class Cli(args: Array<String>) {
   }
 }
 
+class Counter(private val title: String) {
+  fun go() {
+
+  }
+}
+
+class Command(
+  private val command: String,
+  private vararg val args: String
+) {
+
+  var redirect: Boolean = true
+  var name: String = command
+
+  fun run() {
+    ProcessBuilder()
+      .command(command, *args)
+      .apply {
+        if (redirect) redirectOutput(Redirect.INHERIT)
+      }
+      .start()
+      .waitFor()
+  }
+}
+
+object Adb {
+
+  fun install() =
+    Command("adb", "install") // todo add apk name
+
+  fun launch() =
+    Command("adb", "am") // tood activity name
+}
+
+object Gradle {
+
+  fun clean() =
+    Command("./gradlew", "clean")
+
+  fun check() =
+    Command("./gradlew", "ktlint", "detekt")
+
+  fun build(variant: Variant) =
+    Command("./gradlew", "assemble${variant.name.toLowerCase().capitalize()}")
+}
