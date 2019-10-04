@@ -1,32 +1,42 @@
 #!/usr/bin/env kscript
 @file:MavenRepository("jitpack", "https://jitpack.io" )
 @file:DependsOn("com.github.kotlin.kotlinx~cli:kotlinx-cli-jvm:-SNAPSHOT")
+@file:DependsOn("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.3.2")
 
 import Gr.Task.*
 import Gr.Variant.*
-import kotlinx.cli.*
 import java.lang.ProcessBuilder.Redirect
 import kotlin.system.exitProcess
+import kotlinx.cli.*
+import kotlinx.coroutines.*
 
 //~ script
 
 try {
-  Cli(args).createCommands().forEach(Command::run)
+  val cli = Cli(args)
+  val counter = Counter().apply { start() }
+  createCommands(cli).forEach {
+    counter.jobName = it.name
+    it.run()
+    counter.next()
+  }
+  counter.stop()
 } catch(e: Exception) {
+  println(e.message)
   exitProcess(1)
 }
 
-fun Cli.createCommands() = tasks.map {
+fun createCommands(cli: Cli) = cli.tasks.map {
   val command = when(it) {
     CLEAN -> Gradle.clean()
-    BUILD -> Gradle.build(variant)
+    BUILD -> Gradle.build(cli.variant)
     CHECK -> Gradle.check()
     INSTALL -> Adb.install()
     LAUNCH -> Adb.launch()
   }
   command.apply {
-    redirect = !quite
-    name = it.name
+    redirect = !cli.quite
+    name = it.name.toLowerCase()
   }
 }
 
@@ -83,9 +93,63 @@ class Cli(args: Array<String>) {
   }
 }
 
-class Counter(private val title: String) {
-  fun go() {
+class Counter {
 
+  private var job: Job? = null
+
+  private var index = 0
+  private var inc = true
+  private val chars = Array<Char>(4) { ' ' }
+
+  var jobName: String = ""
+
+  private fun cleanln() {
+    print("\u001B[100D")
+    print("\u001B[K")
+  }
+
+  private fun generate() {
+    if (inc && index == chars.size - 1) {
+      inc = false
+    }
+    if (!inc && index == 0) {
+      inc = true
+    }
+    chars.set(index, ' ')
+    index = if (inc) index.inc() else index.dec()
+    chars.set(index, '•')
+  }
+
+  private fun print() {
+    print('[')
+    chars.forEach { print(it) }
+    print(']')
+    print(' ')
+    print(jobName)
+  }
+
+  fun start() {
+    job = GlobalScope.launch {
+      while(true) {
+        cleanln()
+        print()
+        generate()
+        delay(100)
+      }
+    }
+  }
+
+  fun stop() {
+    job?.cancel()
+    cleanln()
+  }
+
+  fun next() {
+    cleanln()
+    print("[ ok ]")
+    print(' ')
+    print(jobName)
+    println()
   }
 }
 
@@ -98,13 +162,14 @@ class Command(
   var name: String = command
 
   fun run() {
-    ProcessBuilder()
-      .command(command, *args)
-      .apply {
-        if (redirect) redirectOutput(Redirect.INHERIT)
-      }
-      .start()
-      .waitFor()
+    Thread.sleep(3_000)
+//    ProcessBuilder()
+//      .command(command, *args)
+//      .apply {
+//        if (redirect) redirectOutput(Redirect.INHERIT)
+//      }
+//      .start()
+//      .waitFor()
   }
 }
 
