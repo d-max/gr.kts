@@ -15,10 +15,11 @@ import kotlinx.coroutines.*
 try {
   val cli = Cli(args)
   val counter = Counter().apply { start() }
-  createCommands(cli).forEach {
+  createCommands(cli).forEach loop@ {
     counter.jobName = it.name
-    it.run()
-    counter.next()
+    val success = it.run()
+    counter.next(success)
+    if (!success) return@loop
   }
   counter.stop()
 } catch(e: Exception) {
@@ -144,9 +145,10 @@ class Counter {
     cleanln()
   }
 
-  fun next() {
+  fun next(success: Boolean) {
+    val status = if (success) "ok" else "^^"
     cleanln()
-    print("[ ok ]")
+    print("[ $status ]")
     print(' ')
     print(jobName)
     println()
@@ -161,8 +163,9 @@ class Command(
   var redirect: Boolean = true
   var name: String = command
 
-  fun run() {
+  fun run(): Boolean {
     Thread.sleep(3_000)
+    return false
 //    ProcessBuilder()
 //      .command(command, *args)
 //      .apply {
