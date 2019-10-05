@@ -175,7 +175,7 @@ class Command(
     fun run() {
         runBlocking {
             val reporter = Reporter(task.name.toLowerCase())
-            val bar = launch {
+            val bar = launch(Dispatchers.Default) {
                 reporter.displayBar()
             }
             val process = launch {
@@ -184,7 +184,11 @@ class Command(
 //                    delay(1_000 * it.nextLong(10))
 //                    it.nextBoolean()
 //                }
-                val success = ProcessBuilder().command(command, *args).start().waitFor() == 0
+                val result = ProcessBuilder()
+                    .command(command, *args)
+                    .start()
+                    .waitFor()
+                val success = result == 0
                 val time = System.currentTimeMillis() - begin
                 bar.cancelAndJoin()
                 reporter.displayResult(time, success)
