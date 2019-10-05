@@ -16,8 +16,12 @@ import kotlin.system.measureTimeMillis
 //~ script
 
 try {
-    Cli(args).createCommands().forEach(Command::run)
+    Cli(args)
+        .createCommands()
+        .forEach(Command::run)
 } catch (e: Exception) {
+    Reporter.cleanln()
+    println(e.message)
     exitProcess(1)
 }
 
@@ -90,16 +94,15 @@ class Reporter(job: String) {
         private const val MOVE = "\u001B[30D"
         private const val CLEAN = "\u001B[K"
 
-        private const val PAD = ' '
         private const val FAIL = 'x'
-        private const val SPACE = ' '
         private const val SUCCESS = '✓'
         private const val INDICATOR = '•'
+        private const val SPACE = ' '
 
         private const val WIDTH = 3
         private const val PADDING = 10
 
-        private fun cleanln() {
+        fun cleanln() {
             print(MOVE)
             print(CLEAN)
         }
@@ -117,7 +120,7 @@ class Reporter(job: String) {
     private var index = 0
     private var inc = true
     private val chars = CharArray(WIDTH) { SPACE }
-    private val jobName = job.padEnd(PADDING, PAD)
+    private val jobName = job.padEnd(PADDING, SPACE)
 
     private fun generateBar() {
         if (inc && index == chars.size - 1) {
@@ -177,11 +180,11 @@ class Command(
             }
             val process = launch {
                 val begin = System.currentTimeMillis()
-                val success = Random(System.currentTimeMillis()).let {
-                    delay(1_000 * it.nextLong(10))
-                    it.nextBoolean()
-                }
-//                val success = ProcessBuilder().command(command, *args).start().waitFor() == 0
+//                val success = Random(System.currentTimeMillis()).let {
+//                    delay(1_000 * it.nextLong(10))
+//                    it.nextBoolean()
+//                }
+                val success = ProcessBuilder().command(command, *args).start().waitFor() == 0
                 val time = System.currentTimeMillis() - begin
                 bar.cancelAndJoin()
                 reporter.displayResult(time, success)
