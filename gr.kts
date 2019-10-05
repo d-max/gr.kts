@@ -21,17 +21,26 @@ try {
         .forEach(Command::run)
 } catch (e: Exception) {
     Reporter.cleanln()
-    println(e.message)
+    e.message?.let(::println)
     exitProcess(1)
 }
 
-fun Cli.createCommands() = tasks.map {
-    when (it) {
+val Cli.variant: Variant
+    get() = when {
+        debug -> DEBUG
+        release -> RELEASE
+        else -> throw Exception("Use -r or -d to choose build variant")
+    }
+
+fun Cli.createCommands() = tasks.map { arg ->
+    val task = Task.values().firstOrNull { it.name.toLowerCase() == arg }
+    when (task) {
         CLEAN -> Gradle.clean()
         BUILD -> Gradle.build(variant)
         CHECK -> Gradle.check()
         INSTALL -> Adb.install()
         RUN -> Adb.launch()
+        else -> throw Exception("Unknown tasks set. Use [clean|build|check|install|run]")
     }
 }
 
@@ -49,33 +58,23 @@ class Cli(args: Array<String>) {
 
     private val cli = CommandLineInterface("./gr.kts")
 
-    val variant by cli.flagValueArgument(
-        "-v",
-        "variant",
-        "Set build variant [debug|release]",
-        DEBUG,
-        mapping = {
-            when (it) {
-                "r" -> RELEASE
-                "d" -> DEBUG
-                else -> error("Unknown build variant. Use [r|d]")
-            }
-        }
+    val debug by cli.flagArgument(
+        "-d",
+        "Debug build variant",
+        false,
+        true
+    )
+
+    val release by cli.flagArgument(
+        "-r",
+        "Release build variant",
+        false,
+        true
     )
 
     val tasks by cli.positionalArgumentsList(
         "T...",
-        "Set of tasks to perform [clean|build|check|install|run]",
-        mapping = {
-            when (it) {
-                "run" -> RUN
-                "clean" -> CLEAN
-                "build" -> BUILD
-                "check" -> CHECK
-                "install" -> INSTALL
-                else -> error("Unknown tasks set. Use [clean|build|check|install|run]")
-            }
-        }
+        "Set of tasks to perform [clean|build|check|install|run]"
     )
 
     init {
