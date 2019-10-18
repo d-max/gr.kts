@@ -4,14 +4,16 @@
 @file:DependsOn("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.3.2")
 
 import Gr.Task.*
-import Gr.Variant.*
-import kotlinx.cli.*
+import Gr.Variant.DEBUG
+import Gr.Variant.RELEASE
+import kotlinx.cli.CommandLineInterface
+import kotlinx.cli.flagArgument
+import kotlinx.cli.parse
+import kotlinx.cli.positionalArgumentsList
 import kotlinx.coroutines.*
-import java.text.SimpleDateFormat
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlin.system.exitProcess
-import kotlin.system.measureTimeMillis
 
 //~ script
 
@@ -85,8 +87,6 @@ class Cli(args: Array<String>) {
 class Reporter(job: String) {
 
     companion object {
-        private const val FORMAT = "mm:ss"
-
         private const val RED = "\u001B[31m"
         private const val GREEN = "\u001B[32m"
         private const val WHITE = "\u001B[0m"
@@ -107,12 +107,8 @@ class Reporter(job: String) {
         }
 
         private fun Long.format(): String {
-            val min = TimeUnit.MILLISECONDS.toMinutes(this)
-            val sec = TimeUnit.MILLISECONDS.toSeconds(this)
-            return String.format(
-                "%02d:%02d",
-                min, sec - TimeUnit.MINUTES.toSeconds(min)
-            )
+            val min = TimeUnit.SECONDS.toMinutes(this)
+            return String.format("%02d:%02d", min, this)
         }
     }
 
@@ -120,6 +116,8 @@ class Reporter(job: String) {
     private var inc = true
     private val chars = CharArray(WIDTH) { SPACE }
     private val jobName = job.padEnd(PADDING, SPACE)
+
+    var time: Long = 0
 
     private fun generateBar() {
         if (inc && index == chars.size - 1) {
@@ -133,7 +131,7 @@ class Reporter(job: String) {
         chars.set(index, INDICATOR)
     }
 
-    private fun printResult(time: Long, success: Boolean) {
+    private fun printResult(success: Boolean) {
         val result = if (success) {
             "$GREEN$SUCCESS$WHITE"
         } else {
@@ -144,9 +142,10 @@ class Reporter(job: String) {
         println(string)
     }
 
-    fun printBar() {
+    private fun printBar() {
         val bar = String(chars)
-        val string = "[$bar]  $jobName  "
+        val duration = time.format()
+        val string = "[$bar]  $jobName  $duration"
         print(string)
     }
 
@@ -159,38 +158,62 @@ class Reporter(job: String) {
         }
     }
 
-    fun displayResult(time: Long, success: Boolean) {
+    fun displayResult(success: Boolean) {
         cleanln()
-        printResult(time, success)
+        printResult(success)
+    }
+}
+
+class Timer(private val reporter: Reporter) {
+
+    suspend fun start() {
+        var seconds: Long = 0
+        while (true) {
+            reporter.time = seconds++
+            delay(1_000)
+        }
     }
 }
 
 class Command(
     private val task: Task,
-    private val command: String,
-    private vararg val args: String
+    private val command: String
 ) {
+
+    companion object {
+
+        private fun String.execute() = ProcessBuilder()
+            .command(split(' '))
+            .start()
+
+        @Deprecated("For testing purposes")
+        private suspend fun randomResult(): Boolean = Random(System.currentTimeMillis()).let {
+            delay(1_000 * it.nextLong(10) + 1)
+            it.nextBoolean()
+        }
+    }
+
+    private fun CoroutineScope.displayBar(reporter: Reporter) =
+        launch(Dispatchers.Default) {
+            reporter.displayBar()
+        }
+
+    private fun CoroutineScope.displayTime(reporter: Reporter) =
+        launch(Dispatchers.Default) {
+            Timer(reporter).start()
+        }
 
     fun run() {
         runBlocking {
             val reporter = Reporter(task.name.toLowerCase())
-            val bar = launch(Dispatchers.Default) {
-                reporter.displayBar()
-            }
+            val bar = displayBar(reporter)
+            val time = displayTime(reporter)
             val process = launch {
-                val begin = System.currentTimeMillis()
-//                val success = Random(System.currentTimeMillis()).let {
-//                    delay(1_000 * it.nextLong(10))
-//                    it.nextBoolean()
-//                }
-                val result = ProcessBuilder()
-                    .command(command, *args)
-                    .start()
-                    .waitFor()
+                val result = command.execute().waitFor()
                 val success = result == 0
-                val time = System.currentTimeMillis() - begin
                 bar.cancelAndJoin()
-                reporter.displayResult(time, success)
+                time.cancelAndJoin()
+                reporter.displayResult(success)
                 if (!success) throw Exception()
             }
             process.join()
@@ -201,20 +224,20 @@ class Command(
 object Adb {
 
     fun install() =
-        Command(INSTALL, "adb", "install") // todo add apk name
+        Command(INSTALL, "adb install") // todo add apk name
 
     fun launch() =
-        Command(RUN, "adb", "am") // tood activity name
+        Command(RUN, "adb am") // tood activity name
 }
 
 object Gradle {
 
     fun clean() =
-        Command(CLEAN, "./gradlew", "clean")
+        Command(CLEAN, "./gradlew clean")
 
     fun check() =
-        Command(CHECK, "./gradlew", "ktlint", "detekt")
+        Command(CHECK, "./gradlew ktlint detekt")
 
     fun build(variant: Variant) =
-        Command(BUILD, "./gradlew", "assemble${variant.name.toLowerCase().capitalize()}")
+        Command(BUILD, "./gradlew assemble${variant.name.toLowerCase().capitalize()}")
 }
