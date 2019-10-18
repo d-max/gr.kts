@@ -3,6 +3,9 @@
 @file:DependsOn("com.github.kotlin.kotlinx~cli:kotlinx-cli-jvm:-SNAPSHOT")
 @file:DependsOn("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.3.2")
 
+import Gr.Command
+import Gr.LazyArg
+import Gr.Log.append
 import Gr.Task.*
 import Gr.Variant.DEBUG
 import Gr.Variant.RELEASE
@@ -11,6 +14,7 @@ import kotlinx.cli.flagArgument
 import kotlinx.cli.parse
 import kotlinx.cli.positionalArgumentsList
 import kotlinx.coroutines.*
+import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlin.system.exitProcess
@@ -20,7 +24,7 @@ import kotlin.system.exitProcess
 try {
     Cli(args)
         .createCommands()
-        .forEach(Command::run)
+        .forEach(Command::invoke)
 } catch (e: Exception) {
     Reporter.cleanln()
     e.message?.let(::println)
@@ -35,26 +39,82 @@ val Cli.variant: Variant
     }
 
 fun Cli.createCommands() = tasks.map { arg ->
-    val task = Task.values().firstOrNull { it.name.toLowerCase() == arg }
+    val task = Task.values().firstOrNull { it.tag == arg }
     when (task) {
-        CLEAN -> Gradle.clean()
+        CLEAN -> Tool.clear()
         BUILD -> Gradle.build(variant)
         CHECK -> Gradle.check()
-        INSTALL -> Adb.install()
+        INSTALL -> Adb.install(variant)
         RUN -> Adb.launch()
+        LOG -> Tool.log()
         else -> throw Exception("Unknown tasks set. Use [clean|build|check|install|run]")
     }
 }
 
-//~ classes
+//~ configuration params
 
 enum class Variant {
-    DEBUG, RELEASE
+    DEBUG, RELEASE;
+
+    val tag: String = name.toLowerCase()
 }
 
 enum class Task {
-    CLEAN, BUILD, CHECK, INSTALL, RUN
+    CLEAN, BUILD, CHECK, INSTALL, RUN, LOG;
+
+    val tag: String = name.toLowerCase()
 }
+
+//~ operational classes
+
+typealias Command = () -> Unit
+typealias LazyArg = () -> String
+
+class Operation(
+        private val task: Task,
+        private val command: String,
+        private val arg: LazyArg? = null
+) : Command {
+
+    companion object {
+
+        @Deprecated("For testing purposes")
+        private suspend fun randomResult(): Boolean = Random(System.currentTimeMillis()).let {
+            delay(1_000 * it.nextLong(10) + 1)
+            it.nextBoolean()
+        }
+    }
+
+    private fun CoroutineScope.displayBar(reporter: Reporter) =
+            launch(Dispatchers.Default) {
+                reporter.displayBar()
+            }
+
+    private fun CoroutineScope.displayTime(reporter: Reporter) =
+            launch(Dispatchers.Default) {
+                Timer(reporter).start()
+            }
+
+    override fun invoke() {
+        runBlocking {
+            Log.append(task.name)
+            val reporter = Reporter(task.tag)
+            val bar = displayBar(reporter)
+            val time = displayTime(reporter)
+            val process = launch {
+                val result = Process(command, arg).execute().waitFor()
+                val success = result == 0
+                bar.cancelAndJoin()
+                time.cancelAndJoin()
+                reporter.displayResult(success)
+                if (!success) throw Exception()
+            }
+            process.join()
+        }
+    }
+}
+
+//~ utilities
 
 class Cli(args: Array<String>) {
 
@@ -76,7 +136,7 @@ class Cli(args: Array<String>) {
 
     val tasks by cli.positionalArgumentsList(
         "T...",
-        "Set of tasks to perform [clean|build|check|install|run]"
+        "Set of tasks to perform [clean|build|check|install|run|append]"
     )
 
     init {
@@ -108,7 +168,8 @@ class Reporter(job: String) {
 
         private fun Long.format(): String {
             val min = TimeUnit.SECONDS.toMinutes(this)
-            return String.format("%02d:%02d", min, this)
+            val sec = TimeUnit.MINUTES.toSeconds(min)
+            return String.format("%02d:%02d", min, this - sec)
         }
     }
 
@@ -175,69 +236,89 @@ class Timer(private val reporter: Reporter) {
     }
 }
 
-class Command(
-    private val task: Task,
-    private val command: String
+class Finder(private val variant: Variant) {
+
+    fun findApk(): String {
+        val cmd = Process(
+                command = "find . -name *${variant.tag}.apk",
+                redirect = false
+        )
+        val reader = cmd.execute().inputStream.buffered().reader()
+        return reader.use {
+            it.readLines().firstOrNull() ?: throw Exception("No apk found")
+        }
+    }
+}
+
+class Process(
+        private val command: String,
+        private val arg: LazyArg? = null,
+        private val redirect: Boolean = true
 ) {
 
-    companion object {
+    private operator fun List<String>.plus(optional: String?): List<String> =
+            if (optional == null) this else toMutableList().plusElement(optional)
 
-        private fun String.execute() = ProcessBuilder()
-            .command(split(' '))
-            .start()
-
-        @Deprecated("For testing purposes")
-        private suspend fun randomResult(): Boolean = Random(System.currentTimeMillis()).let {
-            delay(1_000 * it.nextLong(10) + 1)
-            it.nextBoolean()
+    private fun ProcessBuilder.redirect() = apply {
+        if (redirect) {
+            redirectOutput(Log.redirect)
+            redirectError(Log.redirect)
         }
     }
 
-    private fun CoroutineScope.displayBar(reporter: Reporter) =
-        launch(Dispatchers.Default) {
-            reporter.displayBar()
-        }
+    fun execute(): java.lang.Process {
+        val cmd = command.split(' ') + arg?.invoke()
+        return ProcessBuilder()
+                .redirect()
+                .command(cmd)
+                .start()
+    }
+}
 
-    private fun CoroutineScope.displayTime(reporter: Reporter) =
-        launch(Dispatchers.Default) {
-            Timer(reporter).start()
-        }
+object Log {
 
-    fun run() {
-        runBlocking {
-            val reporter = Reporter(task.name.toLowerCase())
-            val bar = displayBar(reporter)
-            val time = displayTime(reporter)
-            val process = launch {
-                val result = command.execute().waitFor()
-                val success = result == 0
-                bar.cancelAndJoin()
-                time.cancelAndJoin()
-                reporter.displayResult(success)
-                if (!success) throw Exception()
-            }
-            process.join()
-        }
+    private val file = File("${System.getenv("TMPDIR")}/gr.append")
+
+    val redirect: ProcessBuilder.Redirect = ProcessBuilder.Redirect.appendTo(Log.file)
+
+    fun reset() = file.writeText("")
+
+    fun load() = file.readLines().forEach(::println)
+
+    fun append(message: String) = file.appendText("\n##### $message #####\n\n")
+}
+
+//~ factories of commands
+
+object Tool {
+
+    fun log() = {
+        Log.load()
+    }
+
+    fun clear() = {
+        Log.reset()
+        Gradle.clean().invoke()
     }
 }
 
 object Adb {
 
-    fun install() =
-        Command(INSTALL, "adb install") // todo add apk name
+    fun install(variant: Variant) =
+        Operation(INSTALL, "adb install -r") { Finder(variant).findApk() }
 
     fun launch() =
-        Command(RUN, "adb am") // tood activity name
+        Operation(RUN, "adb am") // todo activity name
 }
 
 object Gradle {
 
     fun clean() =
-        Command(CLEAN, "./gradlew clean")
+        Operation(CLEAN, "./gradlew clean")
 
     fun check() =
-        Command(CHECK, "./gradlew ktlint detekt")
+        Operation(CHECK, "./gradlew ktlint detekt")
 
     fun build(variant: Variant) =
-        Command(BUILD, "./gradlew assemble${variant.name.toLowerCase().capitalize()}")
+        Operation(BUILD, "./gradlew assemble${variant.tag.capitalize()}")
 }
