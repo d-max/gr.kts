@@ -206,7 +206,7 @@ class Reporter(job: String) {
     private fun printBar() {
         val bar = String(chars)
         val duration = time.format()
-        val string = "[$bar]  $jobName  $duration"
+        val string = "[$bar]  $jobName  $duration "
         print(string)
     }
 
