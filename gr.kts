@@ -5,7 +5,6 @@
 
 import Gr.Command
 import Gr.LazyArg
-import Gr.Log.append
 import Gr.Task.*
 import Gr.Variant.DEBUG
 import Gr.Variant.RELEASE
@@ -45,7 +44,7 @@ fun Cli.createCommands() = tasks.map { arg ->
         BUILD -> Gradle.build(variant)
         CHECK -> Gradle.check()
         INSTALL -> Adb.install(variant)
-        RUN -> Adb.launch()
+        DIST -> Tool.dist(variant)
         LOG -> Tool.log()
         else -> throw Exception("Unknown tasks set. Use [clean|build|check|install|run]")
     }
@@ -60,7 +59,7 @@ enum class Variant {
 }
 
 enum class Task {
-    CLEAN, BUILD, CHECK, INSTALL, RUN, LOG;
+    CLEAN, BUILD, CHECK, INSTALL, LOG, DIST;
 
     val tag: String = name.toLowerCase()
 }
@@ -136,7 +135,7 @@ class Cli(args: Array<String>) {
 
     val tasks by cli.positionalArgumentsList(
         "T...",
-        "Set of tasks to perform [clean|build|check|install|run|append]"
+        "Set of tasks to perform [clean|build|check|install|dist]"
     )
 
     init {
@@ -267,7 +266,8 @@ class Process(
     }
 
     fun execute(): java.lang.Process {
-        val cmd = command.split(' ') + arg?.invoke()
+        val args = arg?.invoke()?.split(' ') ?: emptyList()
+        val cmd = command.split(' ') + args
         return ProcessBuilder()
                 .redirect()
                 .command(cmd)
@@ -300,15 +300,15 @@ object Tool {
         Log.reset()
         Gradle.clean().invoke()
     }
+
+    fun dist(variant: Variant) =
+        Operation(DIST, "cp") { Finder(variant).findApk() + " ." }
 }
 
 object Adb {
 
     fun install(variant: Variant) =
         Operation(INSTALL, "adb install -r") { Finder(variant).findApk() }
-
-    fun launch() =
-        Operation(RUN, "adb am") // todo activity name
 }
 
 object Gradle {
